@@ -1,0 +1,46 @@
+server:
+  port: 8080
+
+spring:
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${ISSUER_URI:http://localhost:9000}
+  cloud:
+    gateway:
+      default-filters:
+        - RemoveRequestHeader=Cookie
+        - name: RequestRateLimiter
+          args:
+            redis-rate-limiter.replenishRate: 20
+            redis-rate-limiter.burstCapacity: 40
+            key-resolver: "#{@merchantKeyResolver}"
+        - DedupeResponseHeader=Access-Control-Allow-Origin
+      routes:
+        - id: payments
+          uri: ${PAYMENTS_URL:http://localhost:8081}
+          predicates:
+            - Path=/v1/payments/**
+          filters:
+            - name: RequireIdempotencyKey
+            - name: CircuitBreaker
+              args:
+                name: payments
+                fallbackUri: forward:/fallback/payments
+            - name: Retry
+              args:
+                retries: 2
+                methods: GET      # never retry POSTs at the edge: the idempotency key protects the client retry, not ours
+                statuses: BAD_GATEWAY,SERVICE_UNAVAILABLE
+        - id: webhooks
+          uri: ${PAYMENTS_URL:http://localhost:8081}
+          predicates:
+            - Path=/webhooks/stripe
+          filters:
+            - name: RequestSize
+              args:
+                maxSize: 256KB
